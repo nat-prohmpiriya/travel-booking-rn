@@ -1,0 +1,152 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isPartner() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'partner'];
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Users can read and write their own profile
+      allow read, write: if isOwner(userId);
+      // Admins can read all users
+      allow read: if isAdmin();
+      // Allow creation during registration
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Hotels collection
+    match /hotels/{hotelId} {
+      // Anyone can read active hotels
+      allow read: if resource.data.isActive == true;
+      // Partners and admins can create/update/delete hotels
+      allow write: if isPartner();
+      // Admin can read all hotels including inactive
+      allow read: if isAdmin();
+    }
+
+    // Bookings collection
+    match /bookings/{bookingId} {
+      // Users can read their own bookings
+      allow read: if isOwner(resource.data.userId);
+      // Users can create bookings for themselves
+      allow create: if isAuthenticated() && 
+                       request.auth.uid == request.resource.data.userId;
+      // Users can update their own bookings (limited fields)
+      allow update: if isOwner(resource.data.userId) && 
+                       onlyUpdatingAllowedFields(['guestInfo', 'status']) &&
+                       // Prevent status updates to 'confirmed' by users
+                       !(request.resource.data.status == 'confirmed' && 
+                         resource.data.status != 'confirmed');
+      // Partners can read bookings for their hotels
+      allow read: if isPartner() && 
+                     exists(/databases/$(database)/documents/hotels/$(resource.data.hotelId));
+      // Partners can update booking status for their hotels
+      allow update: if isPartner() && 
+                       exists(/databases/$(database)/documents/hotels/$(resource.data.hotelId)) &&
+                       onlyUpdatingAllowedFields(['status', 'paymentInfo']);
+      // Admins can read and update all bookings
+      allow read, update: if isAdmin();
+    }
+
+    // Reviews collection
+    match /reviews/{reviewId} {
+      // Anyone can read active reviews
+      allow read: if resource.data.isActive == true;
+      // Users can create reviews for their own bookings
+      allow create: if isAuthenticated() && 
+                       request.auth.uid == request.resource.data.userId &&
+                       // Verify user has stayed at the hotel
+                       exists(/databases/$(database)/documents/bookings/$(getUserBookingForHotel(request.resource.data.hotelId)));
+      // Users can update their own reviews
+      allow update: if isOwner(resource.data.userId) && 
+                       onlyUpdatingAllowedFields(['rating', 'title', 'comment', 'pros', 'cons', 'images', 'tags', 'updatedAt']);
+      // Users can soft-delete their own reviews
+      allow update: if isOwner(resource.data.userId) && 
+                       request.resource.data.isActive == false &&
+                       resource.data.isActive == true;
+      // Partners can respond to reviews for their hotels
+      allow update: if isPartner() && 
+                       onlyUpdatingAllowedFields(['responses', 'updatedAt']);
+      // Admins can read and moderate all reviews
+      allow read, update: if isAdmin();
+    }
+
+    // Review actions collection (helpful, report)
+    match /reviewActions/{actionId} {
+      // Users can read their own actions
+      allow read: if isOwner(resource.data.userId);
+      // Users can create actions
+      allow create: if isAuthenticated() && 
+                       request.auth.uid == request.resource.data.userId;
+      // Admins can read all actions
+      allow read: if isAdmin();
+    }
+
+    // Helper function to check if only allowed fields are being updated
+    function onlyUpdatingAllowedFields(allowedFields) {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(allowedFields);
+    }
+
+    // Helper function to find user's booking for a hotel (simplified)
+    function getUserBookingForHotel(hotelId) {
+      // This is a simplified approach - in practice you might need a more complex query
+      return request.auth.uid + '_' + hotelId;
+    }
+
+    // Storage rules for file uploads
+    // Note: This section is for Firestore rules, Storage rules are separate
+    // but we document the expected storage structure here for reference
+    
+    // Expected Storage structure:
+    // /users/{userId}/profile/{filename} - User profile images
+    // /hotels/{hotelId}/images/{filename} - Hotel images  
+    // /reviews/{reviewId}/images/{filename} - Review images
+    
+    // Storage rules should be configured separately in Firebase Storage Rules:
+    /*
+    rules_version = '2';
+    service firebase.storage {
+      match /b/{bucket}/o {
+        // User profile images
+        match /users/{userId}/profile/{allPaths=**} {
+          allow read: if true;
+          allow write: if request.auth != null && request.auth.uid == userId;
+        }
+        
+        // Hotel images
+        match /hotels/{hotelId}/images/{allPaths=**} {
+          allow read: if true;
+          allow write: if request.auth != null && 
+                          (isAdmin() || isPartner());
+        }
+        
+        // Review images
+        match /reviews/{reviewId}/images/{allPaths=**} {
+          allow read: if true;
+          allow write: if request.auth != null;
+        }
+      }
+    }
+    */
+  }
+}

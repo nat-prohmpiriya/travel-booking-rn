@@ -1,0 +1,113 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+             firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isPartner() {
+      return isAuthenticated() && 
+             firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+             firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'partner'];
+    }
+    
+    // File validation functions
+    function isValidImageFile() {
+      return request.resource.contentType.matches('image/.*') &&
+             request.resource.size <= 5 * 1024 * 1024; // 5MB limit
+    }
+    
+    function isValidProfileImage() {
+      return isValidImageFile() && 
+             request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp'];
+    }
+
+    // User profile images
+    match /users/{userId}/profile/{filename} {
+      // Anyone can read profile images
+      allow read: if true;
+      // Only the user can upload/update/delete their profile images
+      allow write: if isOwner(userId) && isValidProfileImage();
+    }
+
+    // Hotel images
+    match /hotels/{hotelId}/images/{filename} {
+      // Anyone can read hotel images
+      allow read: if true;
+      // Partners and admins can upload hotel images
+      allow write: if isPartner() && isValidImageFile();
+    }
+
+    // Hotel room images
+    match /hotels/{hotelId}/rooms/{roomId}/images/{filename} {
+      // Anyone can read room images
+      allow read: if true;
+      // Partners and admins can upload room images
+      allow write: if isPartner() && isValidImageFile();
+    }
+
+    // Review images
+    match /reviews/{reviewId}/images/{filename} {
+      // Anyone can read review images
+      allow read: if true;
+      // Authenticated users can upload review images (with size limit)
+      allow write: if isAuthenticated() && isValidImageFile();
+    }
+
+    // General document uploads (for business documents, etc.)
+    match /documents/{userId}/{filename} {
+      // Only the owner can read their documents
+      allow read: if isOwner(userId);
+      // Only the owner can upload documents
+      allow write: if isOwner(userId) && 
+                      request.resource.size <= 10 * 1024 * 1024; // 10MB limit
+    }
+
+    // Admin uploads
+    match /admin/{path=**} {
+      // Only admins can access admin files
+      allow read, write: if isAdmin();
+    }
+
+    // Temporary uploads (for processing)
+    match /temp/{userId}/{filename} {
+      // Users can upload temporary files
+      allow write: if isOwner(userId) && 
+                      request.resource.size <= 20 * 1024 * 1024; // 20MB limit
+      // Users can read their temp files
+      allow read: if isOwner(userId);
+      // Auto-cleanup handled by Cloud Functions
+    }
+
+    // App assets (logos, banners, etc.)
+    match /assets/{path=**} {
+      // Anyone can read app assets
+      allow read: if true;
+      // Only admins can modify app assets
+      allow write: if isAdmin();
+    }
+
+    // Backup files
+    match /backups/{path=**} {
+      // Only admins can access backups
+      allow read, write: if isAdmin();
+    }
+
+    // Default deny rule for any other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
