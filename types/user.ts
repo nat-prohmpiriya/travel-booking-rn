@@ -57,3 +57,20 @@ export interface UpdateUserData {
     preferences?: Partial<UserProfile['preferences']>;
 }
 
+// =================== AUTH STATE INTERFACES ===================
+export interface AuthState {
+    user: UserProfile | null;
+    isAuthenticated: boolean;
+    isLoading: boolean;
+    error: string | null;
+}
+
+export interface AuthContextType extends AuthState {
+    signIn: (email: string, password: string) => Promise<void>;
+    signUp: (email: string, password: string, userData: CreateUserData) => Promise<void>;
+    signOut: () => Promise<void>;
+    signInWithGoogle: () => Promise<void>;
+    resetPassword: (email: string) => Promise<void>;
+    clearError: () => void;
+}
+
